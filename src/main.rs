@@ -1,16 +1,30 @@
 #![windows_subsystem = "windows"]
-use fltk::{app::*, button::*, dialog::*, frame::*, group::*, input::*, text::*, window::*, prelude::*,};
+use fltk::{app::*, button::*, dialog::*, input::*, text::*, window::*,};
+use std::{io::Write, fs::File,};
 
-#[derive(Clone, Debug)]
-// Define a struct for the form fields
-struct Parameters {
-    output: TextDisplay,
-    com_port: Input,
-    file_name: Input, // Empty space to store the filename on form
+#[derive(Debug, Clone, Copy)]
+pub enum Message {
+    Start,
+    Stop,
+    File,
+    Check,
+}
+
+// A result can represent either success/ Ok or failure/ Err.
+enum Result<T, E> { // T and E are generics. T can contain any type of value, E can be any error.
+    Ok(T),
+    Err(E),
 }
 
 fn main() {
+    let mut run: bool = false;
+    
+    // Get app handle
     let app = App::default();
+
+    // Place to put the filename
+    let mut file_name: String = String::new();
+    let mut file: File;
 
     // Main Window
     let mut wind = Window::new(
@@ -21,55 +35,60 @@ fn main() {
         "Serial Port Data Logger v1.0",
     );
 
-    // Fill the form structure
-    let mut parameters = Parameters {
-        output: TextDisplay::new(10, 10, 400, 400, ""),
-        com_port: Input::new(230,420,100,30,"COM Port"),
-        file_name: Input::new(0,0,0,0,""), // Empty space to store the filename on form
-    };
-
-    // Text buffers for our inputs and output
+    // Output and Com Port text boxes
+    let mut output: TextDisplay = TextDisplay::new(10, 10, 400, 400, "");
+    let com_port: Input = Input::new(230,420,100,30,"COM Port");
     let buf_out = TextBuffer::default();
+    output.set_buffer(Some(buf_out));
 
-    // Set output buffer
-    parameters.output.set_buffer(Some(buf_out));
-    parameters.file_name.hide(); // Hide the filename field
-
-    // Clone the parameters to use for the clear function
-    let mut start_parameters = parameters.clone();
-    let mut stop_parameters = parameters.clone();
-    let mut file_parameters = parameters.clone();
-
-    // Start button
+    // Buttons
     let mut start_button = Button::new(30, 420, 100, 40, "Start");
-    start_button.set_callback(move || start(&mut start_parameters));
-
-    // Stop button
     let mut stop_button = Button::new(30, 470, 100, 40, "Stop");
-    stop_button.set_callback(move || stop(&mut stop_parameters));
-
-    // File Choose button
     let mut file_button = Button::new(200, 470, 100, 40, "File");
-    file_button.set_callback(move || file(&app, &mut file_parameters));
+
+    stop_button.deactivate();
 
     // Show the window
     wind.end();
     wind.show();
 
-    // Enter main loop
-    app.run().unwrap();
+    // Setup the message handler
+    let (s, r) = channel::<Message>();
+
+    start_button.emit(s, Message::Start);
+    stop_button.emit(s, Message::Stop);
+    file_button.emit(s, Message::File);
+
+    // Main Message Loop
+    while app.wait() {
+        if let Some(msg) = r.recv() {
+            match msg {
+                Message::Start => {run = start(&mut start_button, &mut stop_button)},
+                Message::Stop => {run = stop(&mut start_button, &mut stop_button)},
+                Message::File => {file_name = file_chooser(&app)},
+            }
+        }
+    }
 }
 
-fn start(p: &mut Parameters) {
-    p.output.buffer().unwrap().set_text(&p.file_name.value());
+// Handle Start Button
+fn start(start_button: &mut Button, stop_button: &mut Button) -> bool {
+    start_button.deactivate();
+    stop_button.activate();
+    
+    true
 }
 
-fn stop(p: &mut Parameters) {
-    p.output.buffer().unwrap().set_text("stop");
+// Handle Stop Button
+fn stop(start_button: &mut Button, stop_button: &mut Button) -> bool {
+    start_button.activate();
+    stop_button.deactivate();
+
+    false
 }
 
-fn file(app: &App, p: &mut Parameters) {
-
+// Handle File Chooser Button
+fn file_chooser(app: &App) -> String {
     let mut fc = FileChooser::new(".", "csv", FileChooserType::Create, "Choose Output File");
     
     fc.show();
@@ -81,8 +100,8 @@ fn file(app: &App, p: &mut Parameters) {
 
     // User hit cancel?
     if fc.value(1).is_none() {
-        return;
+        return String::from("");
     }
 
-    p.file_name.set_value(&fc.value(1).unwrap());
+    fc.value(1).unwrap()
 }
