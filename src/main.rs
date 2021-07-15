@@ -1,8 +1,8 @@
 #![windows_subsystem = "windows"]
-use fltk::{app::*, button::*, dialog::*, input::*, misc::*, text::*, window::*};
-use serialport::{available_ports, SerialPortType};
+use fltk::{app::*, button::*, dialog::*, misc::*, text::*, window::*};
 use std::io::prelude::*;
-use std::{fs::File, io::BufReader, io::Write, io::self, sync::Arc, sync::RwLock, thread, time};
+use std::{fs::OpenOptions, io::Write, io::self, sync::Arc, sync::RwLock, thread};
+use chrono::prelude::*;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Message {
@@ -22,15 +22,22 @@ fn main() {
     let mut file_name: String = String::new();
 
     // Main Window
-    let mut wind = Window::new(100, 100, 420, 530, "Serial Port Data Logger v1.0");
+    let mut wind = Window::new(100, 100, 800, 530, "Serial Port Data Logger v1.0");
 
     // Output and Com Port text boxes
-    let mut output: TextDisplay = TextDisplay::new(10, 10, 400, 400, "");
-    let mut com_port: InputChoice = InputChoice::new(220, 420, 80, 30, "COM Port");
-    let mut com_settings: IntInput = IntInput::new(220, 470, 70, 30, "COM Baud");
-    com_settings.set_value("9600");
-    let buf_out = TextBuffer::default();
-    output.set_buffer(Some(buf_out));
+    let mut output: SimpleTerminal = SimpleTerminal::new(10, 10, 780, 400, "");
+    let mut com_port: InputChoice = InputChoice::new(350, 420, 80, 30, "COM Port");
+    let mut com_settings: InputChoice = InputChoice::new(350, 470, 80, 30, "COM Baud");
+
+    output.set_stay_at_bottom(true);
+    output.set_ansi(true);
+    output.set_cursor_style(TextCursor::Simple);
+
+    let bauds:Vec<&str> = vec!["9600","115200"];
+
+    for b in bauds {
+        com_settings.add(b);
+    }
 
     // Look for usable COM ports and populate drop down
     let ports = serialport::available_ports().expect("No ports found!");
@@ -41,7 +48,7 @@ fn main() {
     // Define Buttons
     let mut start_button = Button::new(30, 420, 100, 40, "Start");
     let mut stop_button = Button::new(30, 470, 100, 40, "Stop");
-    let mut file_button = Button::new(310, 470, 100, 40, "File");
+    let mut file_button = Button::new(150, 470, 100, 40, "File");
 
     // Make sure Stop button is grayed out initially
     stop_button.deactivate();
@@ -63,7 +70,6 @@ fn main() {
         if let Some(msg) = r.recv() {
             match msg {
                 Message::Start => start(
-                    &app,
                     &running,
                     &mut com_port,
                     &mut com_settings,
@@ -81,15 +87,18 @@ fn main() {
 
 // Start logging to CSV
 fn start(
-    app: &App,
     running: &Arc<RwLock<i32>>,
     com_port: &mut InputChoice,
-    com_settings: &mut IntInput,
+    com_settings: &mut InputChoice,
     file_name: &String,
-    output: &mut TextDisplay,
+    output: &mut SimpleTerminal,
     start_button: &mut Button,
     stop_button: &mut Button,
 ) {
+    // Make sure user has choosen a file
+    if file_name == "" {
+        return;
+    }
     // Toggle the start/stop buttons
     start_button.deactivate();
     stop_button.activate();
@@ -101,47 +110,108 @@ fn start(
     let thread_status = Arc::clone(&running);
 
     // Get a clone the form controls
-    let out_handle = output.clone();
-    let baud = com_settings.value().parse::<u32>().unwrap();
-    
+    let mut out_handle = output.clone();
+    let file_name = file_name.clone();
+    let mut start_button = start_button.clone();
+    let mut stop_button = stop_button.clone();
+
+    // Get settings for the COM port
+    let baud = match com_settings.value() {
+        Some(val) => val.parse::<u32>().unwrap(),
+        None => return,
+    };
     let port = match com_port.value() {
-        Some(val) => {format!("{}",val)},
-        None => {String::from("")},
+        Some(val) => val,
+        None => return,
     };
 
     // Spawn the subthread to take readings
     thread::spawn(move || {
-        // Open the serial port
-        let serial_port = serialport::new(port, baud)
-            .timeout(time::Duration::from_millis(10000))
-            .open();
+        // Buffers etc.
+        let mut serial_buf: Vec<u8> = vec![0; 1];
+        let mut out_buf: Vec<u8> = Vec::new();
+        let mut final_buf: Vec<u8> = Vec::new();
 
-        // Write stuff to the output window
+        // Open the serial port
+        let mut serial_port = serialport::new(port, baud)
+            .open();
         match serial_port {
-            Ok(mut serial_port) => {
-                let mut serial_buf: Vec<u8> = vec![0; 1];
-                let mut out_buf: Vec<u8> = Vec::new();
-                loop {
-                    // If the thread status changes to stopped, leave the thread
-                    if *thread_status.read().unwrap() == 0 {
-                        out_handle.buffer().unwrap().append("\n");
-                        break;
-                    }
-                    match serial_port.read(serial_buf.as_mut_slice()) {
-                        Ok(_t) => {
-                            out_buf.push(serial_buf[0]);
-                            if serial_buf[0] == 13 {
-                                out_handle.buffer().unwrap().append(std::str::from_utf8(&out_buf).unwrap());
-                                out_buf.clear();
+            Ok(_) => {},
+            Err(_) => {
+                out_handle.append("Serial Port Open Error");
+                *thread_status.write().unwrap() = 0;
+            }
+        }
+
+        // Open the file
+        let mut f = OpenOptions::new().append(true).create(true).open(&file_name);
+        match f {
+            Ok(_) => {},
+            Err(_) => {
+                out_handle.append("File Open Error");
+                *thread_status.write().unwrap() = 0;
+            }
+        }
+        
+        // Read data from the port and record it
+        loop {
+            // If the thread status changes to stopped, leave the thread and reset the buttons
+            if *thread_status.read().unwrap() == 0 {
+                start_button.activate();
+                stop_button.deactivate();
+                break;
+            }
+
+            // Read data and write to window and file
+            match f {
+                Ok(ref mut f) => {
+                      match serial_port {
+                        Ok(ref mut serial_port) => {
+                            match serial_port.read(serial_buf.as_mut_slice()) {
+                                Ok(_) => {
+                                    match serial_buf[0] {
+                                        // end of line, record and display data
+                                        13 => {
+                                            // Get timestamp
+                                            let mut time_stamp: Vec<u8> = Local::now().format("%Y-%m-%d,%H:%M:%S,").to_string().into_bytes();
+                                            // Append time stamp and line of data
+                                            final_buf.append(&mut time_stamp);
+                                            final_buf.append(&mut out_buf);
+                                            final_buf.append(&mut "\n".to_string().into_bytes());
+
+                                            // Send to display window
+                                            out_handle.append(std::str::from_utf8(&final_buf).unwrap());
+
+                                            // Send to file
+                                            match  f.write_all(&final_buf) {
+                                                Ok(_) => (),
+                                                Err(_e) => {
+                                                    *thread_status.write().unwrap() = 0;
+                                                },
+                                            };
+                                            // Clear out buffers for the next line
+                                            out_buf.clear();
+                                            final_buf.clear();
+                                        },
+                                        // Throw away line feeds
+                                        10 => {},
+                                        // Keep everything else
+                                        _ => out_buf.push(serial_buf[0]),
+                                    }
+                                },
+                                Err(ref e) if e.kind() == io::ErrorKind::TimedOut => (),
+                                Err(ref _e) => {},
                             }
                         },
-                        Err(ref e) if e.kind() == io::ErrorKind::TimedOut => (),
-                        Err(ref e) => {},
+                        Err(_) => {
+                            *thread_status.write().unwrap() = 0;
+                        }
                     }
-                }
-            }
-            Err(ref e) => {
-            }
+                },
+                Err(_)=> {
+                    *thread_status.write().unwrap() = 0;
+                },
+            };
         }
     });
 }
@@ -158,7 +228,7 @@ fn stop(running: &Arc<RwLock<i32>>, start_button: &mut Button, stop_button: &mut
 
 // Handle File Chooser Button
 fn file_chooser(app: &App) -> String {
-    let mut fc = FileChooser::new(".", "csv", FileChooserType::Create, "Choose Output File");
+    let mut fc = FileChooser::new(".", "*.csv", FileChooserType::Create, "Choose Output File");
 
     fc.show();
     fc.window().set_pos(300, 300);
