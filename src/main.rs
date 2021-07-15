@@ -188,7 +188,7 @@ fn start(
                                             // Send to file
                                             match  f.write_all(&final_buf) {
                                                 Ok(_) => (),
-                                                Err(_e) => {
+                                                Err(_) => {
                                                     *thread_status.write().unwrap() = 0;
                                                 },
                                             };
