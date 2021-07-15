@@ -33,7 +33,7 @@ fn main() {
     output.set_ansi(true);
     output.set_cursor_style(TextCursor::Simple);
 
-    let bauds:Vec<&str> = vec!["9600","115200"];
+    let bauds:Vec<&str> = vec!["1200","9600","19200","115200"];
 
     for b in bauds {
         com_settings.add(b);
