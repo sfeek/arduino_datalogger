@@ -1,7 +1,7 @@
 #![windows_subsystem = "windows"]
 use fltk::{app::*, button::*, dialog::*, misc::*, text::*, window::*};
 use std::io::prelude::*;
-use std::{fs::OpenOptions, io::Write, io::self, sync::Arc, sync::RwLock, thread};
+use std::{fs::OpenOptions, io::Write, sync::Arc, sync::RwLock, thread};
 use chrono::prelude::*;
 
 #[derive(Debug, Clone, Copy)]
@@ -153,27 +153,30 @@ fn start(
             }
         }
         
-        // Read data from the port and record it
-        loop {
-            // If the thread status changes to stopped, leave the thread and reset the buttons
-            if *thread_status.read().unwrap() == 0 {
-                start_button.activate();
-                stop_button.deactivate();
-                break;
-            }
+        // Read data and write to window and file
+        match f {
+            Ok(ref mut f) => {
+                    match serial_port {
+                    Ok(ref mut serial_port) => {
+                        // Main Loop to read bytes from the serial port and record them
+                        loop {
 
-            // Read data and write to window and file
-            match f {
-                Ok(ref mut f) => {
-                      match serial_port {
-                        Ok(ref mut serial_port) => {
+                            // If the thread status changes to stopped, leave the thread and reset the buttons
+                            if *thread_status.read().unwrap() == 0 {
+                                start_button.activate();
+                                stop_button.deactivate();
+                                break;
+                            }
+
+                            // Read byte from the port
                             match serial_port.read(serial_buf.as_mut_slice()) {
                                 Ok(_) => {
                                     match serial_buf[0] {
-                                        // end of line, record and display data
+                                        // reached end of line, record and display data
                                         13 => {
                                             // Get timestamp
                                             let mut time_stamp: Vec<u8> = Local::now().format("%Y-%m-%d,%H:%M:%S,").to_string().into_bytes();
+                                            
                                             // Append time stamp and line of data
                                             final_buf.append(&mut time_stamp);
                                             final_buf.append(&mut out_buf);
@@ -189,6 +192,7 @@ fn start(
                                                     *thread_status.write().unwrap() = 0;
                                                 },
                                             };
+
                                             // Clear out buffers for the next line
                                             out_buf.clear();
                                             final_buf.clear();
@@ -199,19 +203,14 @@ fn start(
                                         _ => out_buf.push(serial_buf[0]),
                                     }
                                 },
-                                Err(ref e) if e.kind() == io::ErrorKind::TimedOut => (),
-                                Err(ref _e) => {},
+                                Err(_) => {},
                             }
-                        },
-                        Err(_) => {
-                            *thread_status.write().unwrap() = 0;
                         }
-                    }
-                },
-                Err(_)=> {
-                    *thread_status.write().unwrap() = 0;
-                },
-            };
+                    },
+                    Err(_) => {},
+                }
+            },
+            Err(_)=> {},
         }
     });
 }
