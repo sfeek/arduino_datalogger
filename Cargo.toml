@@ -8,4 +8,5 @@ edition = "2018"
 
 [dependencies]
 fltk = "^0.13"
-
+serialport = "4.0.1"
+chrono = "0.4.19"
