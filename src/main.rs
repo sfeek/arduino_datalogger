@@ -1,8 +1,8 @@
 #![windows_subsystem = "windows"]
+use chrono::prelude::*;
 use fltk::{app::*, button::*, dialog::*, misc::*, text::*, window::*};
 use std::io::prelude::*;
 use std::{fs::OpenOptions, io::Write, sync::Arc, sync::RwLock, thread};
-use chrono::prelude::*;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Message {
@@ -33,7 +33,7 @@ fn main() {
     output.set_ansi(true);
     output.set_cursor_style(TextCursor::Simple);
 
-    let bauds:Vec<&str> = vec!["1200","9600","19200","115200"];
+    let bauds: Vec<&str> = vec!["1200", "9600", "19200", "115200"];
 
     for b in bauds {
         com_settings.add(b);
@@ -86,6 +86,7 @@ fn main() {
 }
 
 // Start logging to CSV
+#[allow(clippy::ptr_arg)]
 fn start(
     running: &Arc<RwLock<i32>>,
     com_port: &mut InputChoice,
@@ -96,7 +97,7 @@ fn start(
     stop_button: &mut Button,
 ) {
     // Make sure user has choosen a file
-    if file_name == "" {
+    if file_name.is_empty() {
         return;
     }
     // Toggle the start/stop buttons
@@ -107,7 +108,7 @@ fn start(
     *running.write().unwrap() = 1;
 
     // Make a clone of the thread status for the sub thread
-    let thread_status = Arc::clone(&running);
+    let thread_status = Arc::clone(running);
 
     // Get a clone the form controls
     let mut out_handle = output.clone();
@@ -116,13 +117,9 @@ fn start(
     let mut stop_button = stop_button.clone();
 
     // Get settings for the COM port
-    let baud = match com_settings.value() {
-        Some(val) => val.parse::<u32>().unwrap(),
-        None => return,
-    };
-    let port = match com_port.value() {
-        Some(val) => val,
-        None => return,
+    let (baud, port) = match (com_settings.value(), com_port.value()) {
+        (Some(val), Some(port)) => (val.parse::<u32>().unwrap(), port),
+        (_, _) => return,
     };
 
     // Spawn the subthread to take readings
@@ -133,84 +130,73 @@ fn start(
         let mut final_buf: Vec<u8> = Vec::new();
 
         // Open the serial port
-        let mut serial_port = serialport::new(port, baud)
-            .open();
-        match serial_port {
-            Ok(_) => {},
+        let mut serial_port = match serialport::new(port, baud).open() {
+            Ok(v) => v,
             Err(_) => {
                 out_handle.append("Serial Port Open Error");
                 *thread_status.write().unwrap() = 0;
+                return;
             }
-        }
+        };
 
         // Open the file
-        let mut f = OpenOptions::new().append(true).create(true).open(&file_name);
-        match f {
-            Ok(_) => {},
+        let mut f = match OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&file_name)
+        {
+            Ok(v) => v,
             Err(_) => {
                 out_handle.append("File Open Error");
                 *thread_status.write().unwrap() = 0;
+                return;
             }
-        }
-        
+        };
+
         // Read data and write to window and file
-        match f {
-            Ok(ref mut f) => {
-                    match serial_port {
-                    Ok(ref mut serial_port) => {
-                        // Main Loop to read bytes from the serial port and record them
-                        loop {
+        // Main Loop to read bytes from the serial port and record them
+        loop {
+            // If the thread status changes to stopped, leave the thread and reset the buttons
+            if *thread_status.read().unwrap() == 0 {
+                start_button.activate();
+                stop_button.deactivate();
+                break;
+            }
 
-                            // If the thread status changes to stopped, leave the thread and reset the buttons
-                            if *thread_status.read().unwrap() == 0 {
-                                start_button.activate();
-                                stop_button.deactivate();
-                                break;
-                            }
+            // Read byte from the port
+            if serial_port.read(serial_buf.as_mut_slice()).is_ok() {
+                match serial_buf[0] {
+                    // reached end of line, record and display data
+                    13 => {
+                        // Get timestamp
+                        let mut time_stamp: Vec<u8> = Local::now()
+                            .format("%Y-%m-%d,%H:%M:%S,")
+                            .to_string()
+                            .into_bytes();
 
-                            // Read byte from the port
-                            match serial_port.read(serial_buf.as_mut_slice()) {
-                                Ok(_) => {
-                                    match serial_buf[0] {
-                                        // reached end of line, record and display data
-                                        13 => {
-                                            // Get timestamp
-                                            let mut time_stamp: Vec<u8> = Local::now().format("%Y-%m-%d,%H:%M:%S,").to_string().into_bytes();
-                                            
-                                            // Append time stamp and line of data
-                                            final_buf.append(&mut time_stamp);
-                                            final_buf.append(&mut out_buf);
-                                            final_buf.append(&mut "\n".to_string().into_bytes());
+                        // Append time stamp and line of data
+                        final_buf.append(&mut time_stamp);
+                        final_buf.append(&mut out_buf);
+                        final_buf.append(&mut "\n".to_string().into_bytes());
 
-                                            // Send to display window
-                                            out_handle.append(std::str::from_utf8(&final_buf).unwrap());
+                        // Send to display window
+                        out_handle.append(std::str::from_utf8(&final_buf).unwrap());
 
-                                            // Send to file
-                                            match  f.write_all(&final_buf) {
-                                                Ok(_) => (),
-                                                Err(_) => {
-                                                    *thread_status.write().unwrap() = 0;
-                                                },
-                                            };
-
-                                            // Clear out buffers for the next line
-                                            out_buf.clear();
-                                            final_buf.clear();
-                                        },
-                                        // Throw away line feeds
-                                        10 => {},
-                                        // Keep everything else
-                                        _ => out_buf.push(serial_buf[0]),
-                                    }
-                                },
-                                Err(_) => {},
-                            }
+                        // Send to file
+                        if f.write_all(&final_buf).is_err() {
+                            *thread_status.write().unwrap() = 0;
                         }
-                    },
-                    Err(_) => {},
+
+                        // Clear out buffers for the next line
+                        out_buf.clear();
+                        final_buf.clear();
+                    }
+                    // Throw away line feeds
+                    10 => {}
+                    // Keep everything else
+                    _ => out_buf.push(serial_buf[0]),
                 }
-            },
-            Err(_)=> {},
+            }
         }
     });
 }
