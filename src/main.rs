@@ -1,6 +1,6 @@
 #![windows_subsystem = "windows"]
 use chrono::prelude::*;
-use fltk::{app::*, button::*, dialog::*, misc::*, text::*, window::*, prelude::*};
+use fltk::{app::*, button::*, dialog::*, misc::*, prelude::*, text::*, window::*};
 use std::io::prelude::*;
 use std::{fs::OpenOptions, io::Write, sync::Arc, sync::RwLock, thread};
 
