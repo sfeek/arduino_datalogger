@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 use fltk::{app::*, button::*, dialog::*, misc::*, text::*, window::*};
 use std::io::prelude::*;
+use fltk::prelude::*;
 use std::{fs::OpenOptions, io::Write, sync::Arc, sync::RwLock, thread};
 use chrono::prelude::*;
 
@@ -31,7 +32,7 @@ fn main() {
 
     output.set_stay_at_bottom(true);
     output.set_ansi(true);
-    output.set_cursor_style(TextCursor::Simple);
+    // output.set_cursor_style(TextCursor::Simple);
 
     let bauds:Vec<&str> = vec!["1200","9600","19200","115200"];
 
